@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Cinemachine;
 using KBCore.Refs;
 using UnityEngine;
@@ -23,6 +23,8 @@ namespace Platformer {
         [SerializeField] float jumpDuration = 0.5f;
         [SerializeField] float jumpCooldown = 0f;
         [SerializeField] float gravityMultiplier = 4f;
+        [SerializeField] float coyoteTimeDuration = 0.15f;
+        [SerializeField] float jumpBufferDuration = 0.15f;
         
         [Header("Dash Settings")]
         [SerializeField] float dashForce = 10f;
@@ -48,6 +50,8 @@ namespace Platformer {
         List<Timer> timers;
         CountdownTimer jumpTimer;
         CountdownTimer jumpCooldownTimer;
+        CountdownTimer coyoteTimer;
+        CountdownTimer jumpBufferTimer;
         CountdownTimer dashTimer;
         CountdownTimer dashCooldownTimer;
         CountdownTimer attackTimer;
@@ -61,7 +65,6 @@ namespace Platformer {
             mainCam = Camera.main.transform;
             freeLookVCam.Follow = transform;
             freeLookVCam.LookAt = transform;
-            // Invoke event when observed transform is teleported, adjusting freeLookVCam's position accordingly
             freeLookVCam.OnTargetObjectWarped(transform, transform.position - freeLookVCam.transform.position - Vector3.forward);
             
             rb.freezeRotation = true;
@@ -102,6 +105,8 @@ namespace Platformer {
             // Setup timers
             jumpTimer = new CountdownTimer(jumpDuration);
             jumpCooldownTimer = new CountdownTimer(jumpCooldown);
+            coyoteTimer = new CountdownTimer(coyoteTimeDuration);
+            jumpBufferTimer = new CountdownTimer(jumpBufferDuration);
 
             jumpTimer.OnTimerStart += () => jumpVelocity = jumpForce;
             jumpTimer.OnTimerStop += () => jumpCooldownTimer.Start();
@@ -117,7 +122,7 @@ namespace Platformer {
 
             attackTimer = new CountdownTimer(attackCooldown);
 
-            timers = new(5) {jumpTimer, jumpCooldownTimer, dashTimer, dashCooldownTimer, attackTimer};
+            timers = new(7) { jumpTimer, jumpCooldownTimer, coyoteTimer, jumpBufferTimer, dashTimer, dashCooldownTimer, attackTimer };
         }
 
         void At(IState from, IState to, IPredicate condition) => stateMachine.AddTransition(from, to, condition);
@@ -156,8 +161,9 @@ namespace Platformer {
         }
 
         void OnJump(bool performed) {
-            if (performed && !jumpTimer.IsRunning && !jumpCooldownTimer.IsRunning && groundChecker.IsGrounded) {
-                jumpTimer.Start();
+            if (performed) {
+                // Enregistre la demande de saut dans le buffer
+                jumpBufferTimer.Start();
             } else if (!performed && jumpTimer.IsRunning) {
                 jumpTimer.Stop();
             }
@@ -173,10 +179,29 @@ namespace Platformer {
 
         void Update() {
             movement = new Vector3(input.Direction.x, 0f, input.Direction.y);
+            
+            HandleGroundedAndCoyoteTime();
+            HandleBufferedJump();
+
             stateMachine.Update();
 
             HandleTimers();
             UpdateAnimator();
+        }
+
+        void HandleGroundedAndCoyoteTime() {
+            if (groundChecker.IsGrounded) {
+                coyoteTimer.Start();
+            }
+        }
+
+        void HandleBufferedJump() {
+            // Le saut se déclenche si un saut est bufferisé ET qu'on est (ou était récemment) au sol
+            if (jumpBufferTimer.IsRunning && coyoteTimer.IsRunning && !jumpTimer.IsRunning && !jumpCooldownTimer.IsRunning) {
+                jumpBufferTimer.Stop();
+                coyoteTimer.Stop();
+                jumpTimer.Start();
+            }
         }
 
         void FixedUpdate() {
